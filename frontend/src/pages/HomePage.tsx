@@ -2,8 +2,6 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { FileText, Users, Shield, ArrowRight, CheckCircle, Star, Award, Zap } from 'lucide-react';
 
-
-
 const HomePage = () => {
   return (
     <div className="min-h-screen">
@@ -28,7 +26,6 @@ const HomePage = () => {
               >
                 User Login
               </Link>
-              
             </div>
           </div>
         </div>
@@ -54,7 +51,6 @@ const HomePage = () => {
               <span>Get Started</span>
               <ArrowRight className="w-5 h-5" />
             </Link>
-            
           </div>
         </div>
       </section>
@@ -125,11 +121,11 @@ const HomePage = () => {
         <div className="max-w-7xl mx-auto">
           <div className="grid md:grid-cols-4 gap-8 text-center">
             <div>
-              <div className="text-4xl font-bold mb-2">250+</div>
+              <div className="text-4xl font-bold mb-2">10K+</div>
               <div className="text-blue-100">Happy Users</div>
             </div>
             <div>
-              <div className="text-4xl font-bold mb-2">5+</div>
+              <div className="text-4xl font-bold mb-2">50+</div>
               <div className="text-blue-100">Services Available</div>
             </div>
             <div>
@@ -144,7 +140,6 @@ const HomePage = () => {
         </div>
       </section>
 
-    
       {/* Footer */}
       <footer className="bg-gray-800 text-white py-12 px-4 sm:px-6 lg:px-8">
         <div className="max-w-7xl mx-auto text-center">
@@ -157,7 +152,7 @@ const HomePage = () => {
           <p className="text-gray-400 mb-6">Making digital services accessible for everyone</p>
           <div className="flex justify-center space-x-6 mb-6">
             <Link to="/login" className="text-gray-400 hover:text-white transition-colors">User Login</Link>
-            
+            <Link to="/admin-login" className="text-gray-400 hover:text-white transition-colors">Admin Portal</Link>
           </div>
           <p className="text-gray-500 text-sm">© 2024 ServiceHub. All rights reserved.</p>
         </div>
