@@ -15,7 +15,6 @@ const Footer = () => {
         <p className="text-gray-400 mb-6">Making digital services accessible for everyone</p>
         <div className="flex justify-center space-x-6 mb-6">
           <Link to="/login" className="text-gray-400 hover:text-white transition-colors">User Login</Link>
-          <Link to="/admin-login" className="text-gray-400 hover:text-white transition-colors">Admin Portal</Link>
         </div>
         <p className="text-gray-500 text-sm">© 2024 ServiceHub. All rights reserved.</p>
       </div>
