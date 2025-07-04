@@ -497,13 +497,6 @@ const UserDashboard = () => {
                 <span className="hidden sm:inline">Refresh</span>
               </button>
               <Link 
-                to="/llr-status" 
-                className="flex items-center space-x-2 bg-blue-100 hover:bg-blue-200 px-3 sm:px-4 py-2 rounded-xl transition-colors text-sm"
-              >
-                <BookOpen className="w-4 h-4" />
-                <span className="hidden sm:inline">LLR Status</span>
-              </Link>
-              <Link 
                 to="/" 
                 className="flex items-center space-x-2 bg-gray-100 hover:bg-gray-200 px-3 sm:px-4 py-2 rounded-xl transition-colors text-sm"
               >
@@ -526,12 +519,13 @@ const UserDashboard = () => {
           <div className="flex space-x-1 p-2 overflow-x-auto">
             {[
               { id: 'services', label: 'Available Services', icon: FileText },
+              { id: 'llr-status', label: 'LLR Exam', icon: BookOpen },
               { id: 'requests', label: 'My Requests', icon: MessageSquare },
               { id: 'history', label: 'Payment History', icon: History }
             ].map((tab) => (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => tab.id === 'llr-status' ? navigate('/llr-status') : setActiveTab(tab.id)}
                 className={`flex items-center space-x-2 px-4 sm:px-6 py-3 rounded-xl transition-all whitespace-nowrap ${
                   activeTab === tab.id
                     ? 'bg-teal-500 text-white shadow-lg'
