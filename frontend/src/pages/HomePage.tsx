@@ -7,7 +7,7 @@ const HomePage = () => {
       <Header />
       <HeroSection />
       <Features />
-      <Services />
+      {/* <Services /> */}
       <Stats />
       <Footer />
     </div>
