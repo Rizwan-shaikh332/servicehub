@@ -7,7 +7,7 @@ import UserLogin from './pages/UserLogin';
 import AdminDashboard from './pages/AdminDashboard';
 import UserDashboard from './pages/UserDashboard';
 import LLRStatusCheck from './pages/LLRStatusCheck';
-import DLPdfGenerator from './pages/DLPdfGenerator';
+// import DLPdfGenerator from './pages/DLPdfGenerator';
 // In your router setup (likely App.tsx or routes.tsx)
 import PoliciesPage from './pages/PoliciesPage';
 import ContactPage from './pages/ContactPage';
@@ -25,7 +25,7 @@ function App() {
           <Route path="/admin" element={<AdminDashboard />} />
           <Route path="/dashboard" element={<UserDashboard />} />
           <Route path="/llr-status" element={<LLRStatusCheck />} />
-          <Route path="/dl-pdf" element={<DLPdfGenerator />} />
+          {/* <Route path="/dl-pdf" element={<DLPdfGenerator />} /> */}
           <Route path="/policies" element={<PoliciesPage />} />
           <Route path="/contact" element={<ContactPage />} />
 
