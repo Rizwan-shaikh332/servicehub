@@ -81,6 +81,47 @@ const PoliciesPage = () => {
             </section>
           </div>
 
+          <section className="pt-6 border-t border-gray-200">
+            <h2 className="text-2xl font-semibold text-green-700 mb-4">Privacy Policy</h2>
+            
+            <div className="space-y-4">
+              <div>
+                <h3 className="text-lg font-semibold text-green-700 mb-1">1. Information Collection</h3>
+                <p>
+                  We collect only necessary information required to provide our services.
+                </p>
+              </div>
+
+              <div>
+                <h3 className="text-lg font-semibold text-green-700 mb-1">2. Data Usage</h3>
+                <p>
+                  Your information is used solely for processing your service requests and communicating with you about your applications. We never sell your data to third parties.
+                </p>
+              </div>
+
+              <div>
+                <h3 className="text-lg font-semibold text-green-700 mb-1">3. Data Protection</h3>
+                <p>
+                  We implement security measures including encryption and access controls to protect your personal information from unauthorized access or disclosure.
+                </p>
+              </div>
+
+              <div>
+                <h3 className="text-lg font-semibold text-green-700 mb-1">4. Information Sharing</h3>
+                <p>
+                  We can not share data or information to any one.
+                </p>
+              </div>
+
+              <div>
+                <h3 className="text-lg font-semibold text-green-700 mb-1">5. Your Rights</h3>
+                <p>
+                  You may request access to, correction of, or deletion of your personal data by contacting us at support@servicehub.site.
+                </p>
+              </div>
+            </div>
+          </section>
+
           <p className="text-sm text-gray-500 mt-8">
             Last updated: {new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
           </p>
