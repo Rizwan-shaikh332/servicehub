@@ -32,11 +32,11 @@ const HeroSection = () => {
               Our Prices Start From
             </span>
             <span className="text-2xl font-bold text-blue-600">
-              ₹80
+              ₹6K
             </span>
             <span className="text-gray-500">to</span>
             <span className="text-2xl font-bold text-blue-600">
-              ₹150
+              ₹10K
             </span>
           </div>
         </div>
