@@ -11,7 +11,7 @@ const HeroSection = () => {
           <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-500 to-indigo-600"> Digital Services</span>
         </h2>
         <p className="text-xl text-gray-600 mb-12 max-w-3xl mx-auto">
-          Access government services, document processing, and more through our secure, user-friendly platform. 
+          Access Digital services and more through our secure, user-friendly platform. 
           Fast, reliable, and available 24/7.
         </p>
         
