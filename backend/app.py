@@ -21,13 +21,23 @@ CORS(app, resources={
 
 # MongoDB connection
 MONGO_URI = os.getenv('MONGO_URI')
-client = MongoClient(
-    MONGO_URI,
-    serverSelectionTimeoutMS=30000,  # 30 seconds
-    socketTimeoutMS=30000,
-    connectTimeoutMS=30000,
-    server_api=ServerApi('1')
-)
+
+try:
+    client = MongoClient(
+        MONGO_URI,
+        serverSelectionTimeoutMS=5000,  # 5 seconds timeout for server selection
+        socketTimeoutMS=30000,          # 30 seconds timeout for socket operations
+        connectTimeoutMS=10000,         # 10 seconds timeout for connection
+        server_api=ServerApi('1')       # Stable API version
+    )
+    
+    # Test the connection
+    client.admin.command('ping')
+    print("Successfully connected to MongoDB!")
+    
+except Exception as e:
+    print(f"Failed to connect to MongoDB: {e}")
+    raise
 db = client.servicehub
 
 # Collections
