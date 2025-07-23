@@ -65,18 +65,18 @@ const PoliciesPage = () => {
               </p>
             </section>
 
-            {/* <section>
-              <h3 className="text-xl font-semibold text-green-700 mb-2">8. Governing Law</h3>
+            <section>
+              <h3 className="text-xl font-semibold text-green-700 mb-2">7. Governing Law</h3>
               <p>
-                These Terms shall be governed and construed in accordance with the laws of India.
+                This laws are governed by India.
               </p>
-            </section> */}
+            </section>
 
 
             <section className="pt-4 border-t border-gray-200">
               <h3 className="text-xl font-semibold text-green-700 mb-2">Return and Refund Policy</h3>
               <p>
-                Refund will be provide when service get failed.
+                NO Refund will be provided.
               </p>
             </section>
           </div>

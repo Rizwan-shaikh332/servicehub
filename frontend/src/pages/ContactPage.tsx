@@ -33,7 +33,7 @@ const ContactPage = () => {
 
             <div className="text-center text-sm text-gray-500 mt-4">
               <p>Or reach us at:</p>
-              {/* <p className="font-medium">thenutrionshop@gmail.com</p> */}
+              <p className="font-medium">Name: Rizwan Khamar Shaikh</p>
               <p className="font-medium">+91 9604610640</p>
             </div>
           </div>
