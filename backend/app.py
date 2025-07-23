@@ -4,21 +4,33 @@ from pymongo import MongoClient
 from bson.objectid import ObjectId
 import os
 from dotenv import load_dotenv
-import secrets
-import string
 import requests
 from datetime import datetime, timedelta
-import base64
 
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)
+# Replace your current CORS(app) with:
+CORS(app, resources={
+    r"/api/*": {
+        "origins": ["*"],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    }
+})
 
 # MongoDB connection
-MONGO_URI = os.getenv('MONGO_URI', )
-client = MongoClient(MONGO_URI)
+MONGO_URI = os.getenv('MONGO_URI')
+client = MongoClient(
+    MONGO_URI,
+    serverSelectionTimeoutMS=30000,  # 30 seconds
+    socketTimeoutMS=30000,
+    connectTimeoutMS=30000,
+    server_api=ServerApi('1')
+)
 db = client.servicehub
+
+# Collections
 users_collection = db.users
 admins_collection = db.admins
 services_collection = db.services
@@ -26,12 +38,240 @@ service_requests_collection = db.service_requests
 user_service_prices_collection = db.user_service_prices
 payment_history_collection = db.payment_history
 llr_tokens_collection = db.llr_tokens
+dl_pdfs_collection = db.dl_pdfs
 
-# LLR API Configuration - Updated with correct endpoints
-LLR_API_KEY = os.getenv('LLR_API_KEY',)
+# API Configurations
+LLR_API_KEY = os.getenv('LLR_API_KEY')
 LLR_EXAM_API_URL = "https://api.jkdigitalcenter.in/api/v2/llexam/doexam.php"
 LLR_STATUS_API_URL = "https://api.jkdigitalcenter.in/api/v2/llexam/checkexam.php"
-LLR_CALLBACK_URL = os.getenv('LLR_CALLBACK_URL','http://localhost:5000/api/llr/callback')
+LLR_CALLBACK_URL = os.getenv('LLR_CALLBACK_URL', 'http://localhost:5000/api/llr/callback')
+
+DL_PDF_API_URL = "https://api.jkdigitalcenter.in/api/v2/dlpdfapi.php"
+DL_API_KEY = os.getenv('LLR_API_KEY')  # Using same API key as LLR
+
+# Initialize collections
+def initialize_collections():
+    dl_pdfs_collection.create_index([("userId", 1)])
+    dl_pdfs_collection.create_index([("dlno", 1)])
+    dl_pdfs_collection.create_index([("createdAt", -1)])
+    
+    # Create default admin if not exists
+    if not admins_collection.find_one({"username": "admin"}):
+        admins_collection.insert_one({
+            "username": "admin",
+            "password": "admin123",
+            "createdAt": datetime.utcnow()
+        })
+        print("Default admin created - Username: admin, Password: admin123")
+
+initialize_collections()
+
+# Helper functions
+def add_payment_history(user_id, transaction_type, amount, description, reference_id=None):
+    try:
+        user = users_collection.find_one({"_id": ObjectId(user_id)})
+        if user:
+            history_doc = {
+                "userId": ObjectId(user_id),
+                "userName": user['name'],
+                "userMobile": user['mobile'],
+                "transactionType": transaction_type,
+                "amount": amount,
+                "description": description,
+                "referenceId": reference_id,
+                "balanceAfter": user.get('walletBalance', 0),
+                "createdAt": datetime.utcnow()
+            }
+            payment_history_collection.insert_one(history_doc)
+    except Exception as e:
+        print(f"Error adding payment history: {e}")
+
+# DL PDF Services
+@app.route('/api/dl/generate-pdf', methods=['POST'])
+def generate_dl_pdf():
+    try:
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['userId', 'serviceId', 'dlno']
+        missing_fields = [field for field in required_fields if field not in data]
+        if missing_fields:
+            return jsonify({
+                "error": f"Missing required fields: {', '.join(missing_fields)}",
+                "required_fields": required_fields
+            }), 400
+
+        # Extract and clean data
+        user_id = data['userId']
+        service_id = data['serviceId']
+        dlno = data['dlno'].strip().upper()
+        pdf_type = data.get('type', 'type1').strip().lower()
+        blood = data.get('blood', 'O+').strip().upper()
+        addrtype = data.get('addrtype', 'perm').strip().lower()
+
+        # Validate ObjectIDs
+        try:
+            user_oid = ObjectId(user_id)
+            service_oid = ObjectId(service_id)
+        except:
+            return jsonify({"error": "Invalid ID format"}), 400
+
+        # Get user and service
+        user = users_collection.find_one({"_id": user_oid})
+        service = services_collection.find_one({"_id": service_oid})
+
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+        if user.get('isBlocked'):
+            return jsonify({"error": "Account blocked"}), 403
+        if not service:
+            return jsonify({"error": "Service not found"}), 404
+        if not service.get('isActive', True):
+            return jsonify({"error": "Service unavailable"}), 400
+
+        # Get service price
+        user_price = user_service_prices_collection.find_one({
+            "userId": user_oid,
+            "serviceId": service_oid
+        })
+        service_price = user_price['price'] if user_price else service.get('defaultPrice', 0)
+        
+        if service_price <= 0:
+            return jsonify({"error": "Service price not configured"}), 400
+        if user.get('walletBalance', 0) < service_price:
+            return jsonify({"error": "Insufficient wallet balance"}), 400
+
+        # Call DL PDF API
+        api_data = {
+            "apikey": DL_API_KEY,
+            "dlno": dlno,
+            "type": pdf_type,
+            "blood": blood,
+            "addrtype": addrtype
+        }
+
+        try:
+            response = requests.post(
+                DL_PDF_API_URL,
+                data=api_data,
+                headers={
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'User-Agent': 'ServiceHub-DL/1.0'
+                },
+                timeout=60
+            )
+            response.raise_for_status()
+            
+            api_response = response.json()
+            if api_response.get('status') != '200':
+                return jsonify({
+                    "error": api_response.get('message', 'API request failed'),
+                    "api_status": api_response.get('status')
+                }), 400
+
+            # Process successful response
+            new_balance = user['walletBalance'] - service_price
+            users_collection.update_one(
+                {"_id": user_oid},
+                {"$set": {"walletBalance": new_balance}}
+            )
+
+            # Store PDF record
+            pdf_record = {
+                "userId": user_oid,
+                "userName": user['name'],
+                "userMobile": user['mobile'],
+                "serviceId": service_oid,
+                "serviceName": service['name'],
+                "servicePrice": service_price,
+                "dlno": dlno,
+                "pdfType": pdf_type,
+                "bloodGroup": blood,
+                "addressType": addrtype,
+                "status": "completed",
+                "name": api_response.get('name'),
+                "dob": api_response.get('dob'),
+                "pdfData": api_response.get('pdf'),
+                "apiResponse": api_response,
+                "createdAt": datetime.utcnow()
+            }
+            
+            result = dl_pdfs_collection.insert_one(pdf_record)
+            
+            # Record transaction
+            add_payment_history(
+                user_id=user_id,
+                transaction_type="debit",
+                amount=service_price,
+                description=f"DL PDF Generation - {dlno}",
+                reference_id=str(result.inserted_id)
+            )
+            
+            return jsonify({
+                "success": True,
+                "message": "DL PDF generated successfully",
+                "name": api_response.get('name'),
+                "dob": api_response.get('dob'),
+                "pdfData": api_response.get('pdf'),
+                "newWalletBalance": new_balance
+            })
+
+        except requests.exceptions.RequestException as e:
+            return jsonify({
+                "error": "DL API service unavailable",
+                "details": str(e)
+            }), 503
+        except ValueError as e:
+            return jsonify({
+                "error": "Invalid API response",
+                "details": str(e)
+            }), 502
+
+    except Exception as e:
+        app.logger.error(f"DL PDF Generation Error: {str(e)}")
+        return jsonify({
+            "error": "Internal server error",
+            "details": str(e)
+        }), 500
+
+@app.route('/api/dl/user-pdfs/<user_id>', methods=['GET'])
+def get_user_dl_pdfs(user_id):
+    try:
+        pdfs = list(dl_pdfs_collection.find(
+            {"userId": ObjectId(user_id)},
+            {"pdfData": 0}  # Exclude PDF data from list view
+        ).sort("createdAt", -1))
+        
+        for pdf in pdfs:
+            pdf['_id'] = str(pdf['_id'])
+            pdf['userId'] = str(pdf['userId'])
+            pdf['serviceId'] = str(pdf['serviceId'])
+        
+        return jsonify({"pdfs": pdfs})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/dl/download-pdf/<pdf_id>', methods=['GET'])
+def download_dl_pdf(pdf_id):
+    try:
+        pdf = dl_pdfs_collection.find_one(
+            {"_id": ObjectId(pdf_id)},
+            {"_id": 0, "pdfData": 1, "name": 1, "dob": 1, "dlno": 1}
+        )
+        
+        if not pdf or not pdf.get('pdfData'):
+            return jsonify({"error": "PDF not found"}), 404
+            
+        return jsonify({
+            "success": True,
+            "name": pdf.get('name'),
+            "dob": pdf.get('dob'),
+            "dlno": pdf.get('dlno'),
+            "pdfData": pdf['pdfData']
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
 
 # Create default admin if not exists
 def create_default_admin():
@@ -51,25 +291,211 @@ def create_default_admin():
 # Initialize default admin
 create_default_admin()
 
-# Helper function to add payment history entry
-def add_payment_history(user_id, transaction_type, amount, description, reference_id=None):
+
+# Payment Gateway Endpoints
+@app.route('/api/payment/create-order', methods=['POST', 'OPTIONS'])
+def create_payment_order():
+    if request.method == 'OPTIONS':
+        # Handle preflight request
+        response = jsonify({'status': 'preflight'})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        return response
+
     try:
-        user = users_collection.find_one({"_id": ObjectId(user_id)})
-        if user:
-            history_doc = {
-                "userId": ObjectId(user_id),
-                "userName": user['name'],
-                "userMobile": user['mobile'],
-                "transactionType": transaction_type,
+        # Validate request
+        if not request.is_json:
+            return jsonify({"error": "Request must be JSON"}), 400
+
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['userId', 'amount']
+        missing_fields = [field for field in required_fields if field not in data]
+        if missing_fields:
+            return jsonify({
+                "error": f"Missing required fields: {', '.join(missing_fields)}",
+                "required_fields": required_fields
+            }), 400
+
+        # Validate amount
+        try:
+            amount = float(data['amount'])
+            if amount < 200:
+                return jsonify({
+                    "error": "Minimum amount is ₹200",
+                    "minimum_amount": 200
+                }), 400
+        except ValueError:
+            return jsonify({
+                "error": "Invalid amount value",
+                "details": "Amount must be a valid number"
+            }), 400
+
+        # Validate user exists and is not blocked
+        try:
+            user_id = ObjectId(data['userId'])
+        except:
+            return jsonify({"error": "Invalid user ID format"}), 400
+
+        user = users_collection.find_one({"_id": user_id})
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+        if user.get('isBlocked', False):
+            return jsonify({"error": "Account blocked"}), 403
+
+        # Generate transaction details
+        transaction_id = f"TXN{str(uuid.uuid4().hex)[:16].upper()}"
+        upi_id = "payment@jkdigitalcenter.in"
+        qr_code_url = f"https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=upi://pay?pa={upi_id}&pn=JK%20Digital%20Center&am={amount}&cu=INR"
+        payment_link = f"https://api.jkdigitalcenter.in/payment?token={transaction_id}"
+        
+        # Create payment record
+        payment_record = {
+            "userId": user_id,
+            "userName": user.get('name'),
+            "userMobile": user.get('mobile'),
+            "amount": amount,
+            "transactionId": transaction_id,
+            "status": "pending",
+            "qrCodeUrl": qr_code_url,
+            "upiId": upi_id,
+            "paymentLink": payment_link,
+            "createdAt": datetime.utcnow(),
+            "updatedAt": datetime.utcnow()
+        }
+        
+        # Insert into database with error handling
+        try:
+            result = db.payments.insert_one(payment_record)
+            if not result.inserted_id:
+                raise Exception("Failed to create payment record")
+        except Exception as e:
+            app.logger.error(f"Database insertion failed: {str(e)}")
+            return jsonify({
+                "error": "Payment processing failed",
+                "details": "Could not save payment record"
+            }), 500
+
+        # Add to payment history
+        try:
+            add_payment_history(
+                user_id=str(user_id),
+                transaction_type="pending_credit",
+                amount=amount,
+                description=f"Payment initiated - {transaction_id}",
+                reference_id=transaction_id
+            )
+        except Exception as e:
+            app.logger.error(f"Payment history recording failed: {str(e)}")
+            # Continue even if history fails - main payment succeeded
+
+        # Prepare success response
+        response_data = {
+            "status": "success",
+            "message": "Payment order created successfully",
+            "data": {
+                "transactionId": transaction_id,
                 "amount": amount,
-                "description": description,
-                "referenceId": reference_id,
-                "balanceAfter": user.get('walletBalance', 0),
-                "createdAt": datetime.utcnow()
+                "qrCodeUrl": qr_code_url,
+                "upiId": upi_id,
+                "paymentLink": payment_link,
+                "user": {
+                    "id": str(user_id),
+                    "name": user.get('name'),
+                    "mobile": user.get('mobile'),
+                    "walletBalance": user.get('walletBalance', 0)
+                }
             }
-            payment_history_collection.insert_one(history_doc)
+        }
+
+        response = jsonify(response_data)
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        return response
+
+    except ValueError as e:
+        return jsonify({
+            "error": "Invalid input data",
+            "details": str(e)
+        }), 400
     except Exception as e:
-        print(f"Error adding payment history: {e}")
+        app.logger.error(f"Unexpected error in payment creation: {str(e)}")
+        return jsonify({
+            "error": "Internal server error",
+            "details": "Please try again later"
+        }), 500
+
+@app.route('/api/payment/gateway-history', methods=['GET'])
+def get_payment_gateway_history():
+    try:
+        user_id = request.args.get('userId')
+        if not user_id:
+            return jsonify({"error": "User ID is required"}), 400
+        
+        payments = list(db.payments.find(
+            {"userId": ObjectId(user_id)},
+            sort=[("createdAt", -1)],
+            limit=10
+        ))
+        
+        # Convert ObjectId and datetime to strings
+        for payment in payments:
+            payment['_id'] = str(payment['_id'])
+            payment['userId'] = str(payment['userId'])
+            payment['createdAt'] = payment['createdAt'].isoformat()
+            if 'updatedAt' in payment:
+                payment['updatedAt'] = payment['updatedAt'].isoformat()
+        
+        return jsonify({"history": payments})
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/payment/callback', methods=['POST'])
+def payment_callback():
+    try:
+        txnid = request.args.get('token')
+        if not txnid:
+            return jsonify({"error": "Token is required"}), 400
+        
+        # Verify the transaction with payment gateway
+        api_url = f"https://api.jkdigitalcenter.in/api/v2/pg/orders/pg-order-status.php?txnid={txnid}"
+        response = requests.get(api_url)
+        response_data = response.json()
+        
+        if response_data.get('status') == '200':
+            # Payment successful - update our database
+            payment = db.payments.find_one({"txn_id": txnid})
+            if payment and payment['status'] != 'success':
+                # Update payment status
+                db.payments.update_one(
+                    {"txn_id": txnid},
+                    {"$set": {
+                        "status": "success",
+                        "updatedAt": datetime.utcnow()
+                    }}
+                )
+                
+                # Update user wallet balance
+                users_collection.update_one(
+                    {"_id": payment['userId']},
+                    {"$inc": {"walletBalance": payment['amount']}}
+                )
+                
+                # Add payment history
+                add_payment_history(
+                    str(payment['userId']),
+                    "credit",
+                    payment['amount'],
+                    "Wallet top-up via payment gateway",
+                    txnid
+                )
+        
+        return jsonify({"status": "ok"})
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
@@ -439,7 +865,7 @@ def delete_service(service_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# LLR Service APIs - COMPLETELY FIXED VERSION
+# LLR Service APIs
 @app.route('/api/llr/submit-exam', methods=['POST'])
 def submit_llr_exam():
     try:
@@ -452,18 +878,6 @@ def submit_llr_exam():
         pin = data.get('pin', '')
         exam_type = data.get('type', 'day')
         
-        print("=" * 80)
-        print("LLR EXAM SUBMISSION - DETAILED DEBUG")
-        print("=" * 80)
-        print(f"Raw request data: {data}")
-        print(f"User ID: {user_id}")
-        print(f"Service ID: {service_id}")
-        print(f"Application No: '{applno}' (length: {len(applno) if applno else 0})")
-        print(f"DOB: '{dob}' (length: {len(dob) if dob else 0})")
-        print(f"Password: '{password}' (length: {len(password) if password else 0})")
-        print(f"PIN: '{pin}' (length: {len(pin) if pin else 0})")
-        print(f"Type: '{exam_type}'")
-        
         if not all([user_id, service_id, applno, dob, password]):
             missing_fields = []
             if not user_id: missing_fields.append('userId')
@@ -472,7 +886,6 @@ def submit_llr_exam():
             if not dob: missing_fields.append('dob')
             if not password: missing_fields.append('pass')
             
-            print(f"Missing required fields: {missing_fields}")
             return jsonify({"error": f"Missing required fields: {', '.join(missing_fields)}"}), 400
         
         # Get user and service details
@@ -480,15 +893,12 @@ def submit_llr_exam():
         service = services_collection.find_one({"_id": ObjectId(service_id)})
         
         if not user:
-            print("User not found in database")
             return jsonify({"error": "User not found"}), 404
         
         if user.get('isBlocked', False):
-            print("User account is blocked")
             return jsonify({"error": "Your account has been blocked. Please contact administrator."}), 403
         
         if not service:
-            print("Service not found in database")
             return jsonify({"error": "Service not found"}), 404
         
         # Get user-specific price
@@ -498,16 +908,12 @@ def submit_llr_exam():
         })
         
         service_price = user_price['price'] if user_price else service.get('defaultPrice', 0)
-        print(f"Service price: ₹{service_price}")
-        print(f"User wallet balance: ₹{user.get('walletBalance', 0)}")
         
         if service_price <= 0:
-            print("Service price not set")
             return jsonify({"error": "Service price not set for your account. Please contact administrator."}), 400
         
         # Check wallet balance
         if user.get('walletBalance', 0) < service_price:
-            print("Insufficient wallet balance")
             return jsonify({"error": "Insufficient wallet balance"}), 400
         
         # Clean and format data for LLR API
@@ -517,28 +923,7 @@ def submit_llr_exam():
         clean_pin = pin.strip() if pin else ""
         clean_type = exam_type.strip().lower()
         
-        print(f"Cleaned data:")
-        print(f"  Application No: '{clean_applno}'")
-        print(f"  DOB: '{clean_dob}'")
-        print(f"  Password: '{clean_password}'")
-        print(f"  PIN: '{clean_pin}'")
-        print(f"  Type: '{clean_type}'")
-        
-        # Validate DOB format (should be YYYY-MM-DD or DD-MM-YYYY or DD/MM/YYYY)
-        if clean_dob:
-            # Convert different date formats to DD-MM-YYYY format
-            if '/' in clean_dob:
-                clean_dob = clean_dob.replace('/', '-')
-            
-            # If it's in YYYY-MM-DD format, convert to DD-MM-YYYY
-            if len(clean_dob) == 10 and clean_dob[4] == '-':
-                parts = clean_dob.split('-')
-                if len(parts) == 3:
-                    clean_dob = f"{parts[2]}-{parts[1]}-{parts[0]}"
-        
-        print(f"Final DOB format: '{clean_dob}'")
-        
-        # Prepare data for LLR API - EXACT format as per documentation
+        # Call LLR API
         llr_data = {
             "apikey": LLR_API_KEY,
             "applno": clean_applno,
@@ -549,88 +934,22 @@ def submit_llr_exam():
             "callback": LLR_CALLBACK_URL
         }
         
-        print("=" * 50)
-        print("SENDING TO LLR API:")
-        print("=" * 50)
-        print(f"URL: {LLR_EXAM_API_URL}")
-        print(f"API Key: {LLR_API_KEY[:10]}...")
-        print(f"Data being sent:")
-        for key, value in llr_data.items():
-            if key == 'apikey':
-                print(f"  {key}: {value[:10]}...")
-            else:
-                print(f"  {key}: '{value}'")
-        
-        # Call LLR API with proper headers and configuration
         try:
             headers = {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'User-Agent': 'ServiceHub-LLR/1.0',
-                'Accept': 'application/json',
-                'Cache-Control': 'no-cache'
+                'User-Agent': 'ServiceHub-LLR/1.0'
             }
             
-            print(f"Request headers: {headers}")
-            
-            # Make the API call
             response = requests.post(
                 LLR_EXAM_API_URL, 
                 data=llr_data, 
                 headers=headers,
-                timeout=90,  # Increased timeout for exam submission
-                verify=True,
-                allow_redirects=True
+                timeout=90
             )
             
-            print("=" * 50)
-            print("LLR API RESPONSE:")
-            print("=" * 50)
-            print(f"Status Code: {response.status_code}")
-            print(f"Response Headers: {dict(response.headers)}")
-            print(f"Response Text: {response.text}")
-            print(f"Response Length: {len(response.text)}")
+            llr_response = response.json()
             
-            # Check HTTP status code
-            if response.status_code != 200:
-                print(f"HTTP Error: {response.status_code}")
-                return jsonify({
-                    "error": f"LLR API returned HTTP error {response.status_code}",
-                    "details": "Please try again later or contact support."
-                }), 500
-            
-            # Check if response is empty
-            if not response.text.strip():
-                print("Empty response from LLR API")
-                return jsonify({
-                    "error": "Empty response from LLR API",
-                    "details": "The LLR service may be temporarily unavailable."
-                }), 500
-            
-            # Try to parse JSON response
-            try:
-                llr_response = response.json()
-                print(f"Parsed JSON Response: {llr_response}")
-            except ValueError as e:
-                print(f"JSON Parse Error: {str(e)}")
-                print(f"Raw response that failed to parse: {response.text}")
-                return jsonify({
-                    "error": "Invalid response format from LLR API",
-                    "details": "The LLR service returned an unexpected response format."
-                }), 500
-            
-            # Extract response details
-            api_status = str(llr_response.get('status', ''))
-            api_message = llr_response.get('message', '')
-            api_token = llr_response.get('token', '')
-            
-            print(f"API Status: '{api_status}'")
-            print(f"API Message: '{api_message}'")
-            print(f"API Token: '{api_token}'")
-            
-            # Handle different response statuses
-            if api_status == "200":
-                print("✅ SUCCESS: LLR exam submitted successfully")
-                
+            if llr_response.get('status') == '200':
                 # Deduct amount from wallet
                 new_balance = user.get('walletBalance', 0) - service_price
                 users_collection.update_one(
@@ -646,7 +965,7 @@ def submit_llr_exam():
                     "serviceId": ObjectId(service_id),
                     "serviceName": service['name'],
                     "servicePrice": service_price,
-                    "token": api_token,
+                    "token": llr_response.get('token'),
                     "applno": llr_response.get('applno', clean_applno),
                     "applname": llr_response.get('applname', ''),
                     "dob": llr_response.get('dob', clean_dob),
@@ -667,82 +986,42 @@ def submit_llr_exam():
                 description = f"Payment for {service['name']} service - Application: {clean_applno}"
                 add_payment_history(user_id, "debit", service_price, description, str(result.inserted_id))
                 
-                print(f"✅ Transaction completed successfully")
-                print(f"New wallet balance: ₹{new_balance}")
-                
                 return jsonify({
                     "success": True,
                     "message": "LLR exam request submitted successfully!",
-                    "token": api_token,
+                    "token": llr_response.get('token'),
                     "queue": llr_response.get('queue', ''),
                     "applname": llr_response.get('applname', ''),
                     "rtoname": llr_response.get('rtoname', ''),
                     "newWalletBalance": new_balance
                 })
                 
-            elif api_status == "404":
-                print("❌ ERROR 404: Application data doesn't match")
+            elif llr_response.get('status') == '404':
                 return jsonify({
                     "error": "Application data verification failed",
-                    "message": api_message,
-                    "details": "Please verify that your Application Number and Date of Birth exactly match your LLR application documents. Check for any typos or format differences."
+                    "message": llr_response.get('message'),
+                    "details": "Please verify that your Application Number and Date of Birth exactly match your LLR application documents."
                 }), 400
                 
-            elif api_status == "500":
-                print("❌ ERROR 500: LLR service error")
+            elif llr_response.get('status') == '500':
                 return jsonify({
                     "error": "LLR service temporarily unavailable",
-                    "message": api_message,
-                    "details": "The LLR service is experiencing issues. Please try again after some time."
+                    "message": llr_response.get('message')
                 }), 500
                 
-            elif api_status == "300":
-                print("❌ ERROR 300: Refund/Cancellation")
-                return jsonify({
-                    "error": "Exam booking cancelled",
-                    "message": api_message,
-                    "details": "Your exam booking was cancelled by the system."
-                }), 400
-                
             else:
-                print(f"❌ UNKNOWN STATUS: {api_status}")
                 return jsonify({
                     "error": f"Unexpected response from LLR API",
-                    "message": api_message,
-                    "status": api_status,
-                    "details": "Please contact support if this issue persists."
+                    "message": llr_response.get('message'),
+                    "status": llr_response.get('status')
                 }), 400
                 
-        except requests.exceptions.Timeout:
-            print("❌ TIMEOUT: LLR API request timed out")
-            return jsonify({
-                "error": "LLR API request timed out",
-                "details": "The request took too long to process. Please try again."
-            }), 500
-            
-        except requests.exceptions.ConnectionError as e:
-            print(f"❌ CONNECTION ERROR: {str(e)}")
-            return jsonify({
-                "error": "Failed to connect to LLR API",
-                "details": "Please check your internet connection and try again."
-            }), 500
-            
         except requests.exceptions.RequestException as e:
-            print(f"❌ REQUEST ERROR: {str(e)}")
             return jsonify({
-                "error": f"LLR API request failed: {str(e)}",
-                "details": "Please try again or contact support."
+                "error": f"LLR API request failed: {str(e)}"
             }), 500
             
-        except Exception as e:
-            print(f"❌ GENERAL ERROR: {str(e)}")
-            return jsonify({
-                "error": f"Unexpected error: {str(e)}",
-                "details": "Please contact support."
-            }), 500
-    
     except Exception as e:
-        print(f"❌ SUBMIT LLR EXAM ERROR: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/llr/check-status', methods=['POST'])
@@ -772,16 +1051,10 @@ def check_llr_status():
                 LLR_STATUS_API_URL, 
                 data=status_data, 
                 headers=headers,
-                timeout=30,
-                verify=True
+                timeout=30
             )
             
-            print(f"LLR Status API Response: {response.text}")
-            
-            try:
-                status_response = response.json()
-            except ValueError:
-                return jsonify({"error": "Invalid response from LLR status API"}), 500
+            status_response = response.json()
             
             # Update token document with latest status
             update_data = {
@@ -836,9 +1109,7 @@ def check_llr_status():
             
         except requests.exceptions.RequestException as e:
             return jsonify({"error": f"Failed to connect to LLR status API: {str(e)}"}), 500
-        except Exception as e:
-            return jsonify({"error": f"LLR status API error: {str(e)}"}), 500
-    
+            
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -893,7 +1164,7 @@ def get_user_llr_tokens(user_id):
         return jsonify({"error": str(e)}), 500
 
 
-# Service Request APIs (existing)
+# Service Request APIs
 @app.route('/api/user/services/<user_id>', methods=['GET'])
 def get_user_services(user_id):
     try:
@@ -1082,7 +1353,7 @@ def get_user_requests(user_id):
 
 # Payment History APIs
 @app.route('/api/user/payment-history/<user_id>', methods=['GET'])
-def get_payment_history(user_id):
+def get_user_payment_history(user_id):
     try:
         # Get payment history for the user
         history = list(payment_history_collection.find({
